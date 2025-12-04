@@ -16,6 +16,9 @@ NoU_Motor elevatorLeftDrive(7);
 
 // Variables
 
+bool autoDone = false;
+bool lastAutoButton = false;
+
 // Motor powers for mecanum
 double leftFrontPower = 0;
 double rightFrontPower = 0;
@@ -24,15 +27,13 @@ double rightBackPower = 0;
 float maxMotorPower;
 
 // Elevator Positioning
-int elevatorPosition;
-int elevatorState = 0;
+int elevatorState = 1;
 long elevatorTarget = 0;
-float elevatorPower = 0;
-float elevatorThrottle = 0;
+bool elevatorRunning = false;
+int elevatorDirection = 1;
+int elevatorPosition;
 bool elevatorUseSetpoint = true;
-
-float elevatorIntegral = 0;
-float elevatorPrevError = 0;
+bool lastToggle = false;
 
 
 void setup() {
@@ -91,80 +92,105 @@ void mecanumDrive() {
 }
 void autonomous() {
 
-  if (PestoLink.buttonHeld(enableAuto)) { //run auto
+  bool current = PestoLink.buttonHeld(enableAuto); // Ensures that the autonomous is not repeatedly enabled when the button is pressed
+
+  if (current && !lastAutoButton && !autoDone) { //run auto
+    
+    autoDone = true;
+
     frontLeftDrive.set(1); // Drive Forward
     frontRightDrive.set(1);
     backLeftDrive.set(1);
     backRightDrive.set(1);
+
     delay(autoDriveTimeout);
+
     frontLeftDrive.set(0);
     frontRightDrive.set(0);
     backLeftDrive.set(0);
     backRightDrive.set(0);
+
     endEffectorDrive.set(1); // Outtake preload
+
     delay(autoOuttakeTimeout);
+
     endEffectorDrive.set(0);
   }
+
+  lastAutoButton = current;
+
 }
 
 void elevator() {
 
-  if (PestoLink.buttonHeld(toggleElevator)) {
-    if (elevatorUseSetpoint == false) {
-      elevatorUseSetpoint = true;
-    }
-    else {
-      elevatorUseSetpoint = false;
-    }
+  bool currentToggle = PestoLink.buttonHeld(toggleElevator); // Toggle the elevator
+
+  if (currentToggle && !lastToggle) {
+    elevatorUseSetpoint = !elevatorUseSetpoint;
   }
-  // Elevator position code
-  if (PestoLink.buttonHeld(l1Button) && elevatorUseSetpoint) {
+
+  lastToggle = currentToggle;
+
+  // Elevator position and movement code
+  elevatorPosition = elevatorRightDrive.getPosition();
+  
+  if (PestoLink.buttonHeld(l1Button) && elevatorUseSetpoint && elevatorState != 1) {
     elevatorTarget = l1Setpoint;
+    elevatorRunning = true;
+    elevatorState = 1;
   }
-  else if (PestoLink.buttonHeld(l2Button) && elevatorUseSetpoint) {
+  else if (PestoLink.buttonHeld(l2Button) && elevatorUseSetpoint && elevatorState != 2) {
     elevatorTarget = l2Setpoint;
+    elevatorRunning = true;
+    elevatorState = 2;
   }
-  else if (PestoLink.buttonHeld(l3Button) && elevatorUseSetpoint) {
+  else if (PestoLink.buttonHeld(l3Button) && elevatorUseSetpoint && elevatorState != 3) {
     elevatorTarget = l3Setpoint;
+    elevatorRunning = true;
+    elevatorState = 3;
   }
 
-  // PID Code   
-  if (elevatorUseSetpoint) {
-    long currentPos = elevatorRightDrive.getPosition();
-    long error = elevatorTarget - currentPos;
+  if (!elevatorRunning && elevatorUseSetpoint) {
+    setElevatorDirection(0);
+  }
+  else if (elevatorUseSetpoint) {
+    // Simple P control (much safer than full power)
+    int error = elevatorTarget - elevatorPosition;
+    double power = error * 0.004;       // tune this
+    power = std::clamp(power, -1.0, 1.0);
 
-    elevatorIntegral += error;
-    float derivative = error - elevatorPrevError;
+    setElevatorDirection(power);
 
-    elevatorPower =  -1 * ((kP * error) + (kI * elevatorIntegral) + (kD * derivative));
-    elevatorPower = constrain(elevatorPower, -0.9, 0.9);
-
-    // Stop when near target
-    if (abs(error) < 40) {
-        elevatorPower = 0;
-        elevatorIntegral = 0;
+    // stop when close enough
+    if (abs(error) < 5) {  // acceptable tolerance
+        setElevatorDirection(0);
+        elevatorRunning = false;
     }
+  }
 
-    elevatorRightDrive.set(elevatorPower);
-    elevatorLeftDrive.set(-elevatorPower);
-    elevatorPrevError = error;
-
-  } 
-  else {
-    elevatorRightDrive.set(elevatorThrottle);
-    elevatorLeftDrive.set(-elevatorThrottle);
-    elevatorIntegral = 0;
-    elevatorPrevError = 0;
+  // Manual Elevator
+  if (PestoLink.buttonHeld(elevatorUpButton) && !elevatorUseSetpoint) {
+    setElevatorDirection(1);
+  }
+  else if (PestoLink.buttonHeld(elevatorDownButton) && !elevatorUseSetpoint) {
+    setElevatorDirection(-1);
   }
 }
 
 void intake() {
-
-  // Intake/Outtake code
   if (PestoLink.buttonHeld(outtakeButton)) { // Intake + Outake
     endEffectorDrive.set(1);
   }
-  if (PestoLink.buttonHeld(reverseOuttakeButton)){ // Reverse intake
+  else if (PestoLink.buttonHeld(reverseOuttakeButton)){ // Reverse intake
     endEffectorDrive.set(-1);
   }
+  else {
+    endEffectorDrive.set(0);
+  }
+}
+
+
+void setElevatorDirection(double direction) {
+  elevatorRightDrive.set(direction);
+  elevatorLeftDrive.set(-direction);
 }
